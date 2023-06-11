@@ -37,7 +37,6 @@ impl<E> Clone for SystemsHandle<E> {
 
 struct Systems<E> {
 	tasks_sender: arc_swap::ArcSwapOption<mpsc::UnboundedSender<NamedTask<E>>>,
-	results_sender: mpsc::UnboundedSender<SystemError<E>>,
 	should_stop: CancellationToken,
 }
 
@@ -51,7 +50,6 @@ impl SystemsMasterBuilder {
 			systems: Arc::new(Systems {
 				tasks_sender: arc_swap::ArcSwapOption::new(Some(Arc::new(tasks_sender))),
 				should_stop,
-				results_sender,
 			}),
 		};
 
@@ -77,7 +75,7 @@ impl SystemsMasterBuilder {
 					_ = signal::ctrl_c(), if catch_signals => {
 						systems_handle.start_shutdown();
 					}
-					_ = &mut shutdown_timeout, if self.timeout.is_some() => {
+					_ = &mut shutdown_timeout, if !aborting && self.timeout.is_some() => {
 						warn!("Graceful stopping timeout reached - aborting tasks");
 						aborting = true;
 						all_systems.iter_mut().for_each(|f: &mut NamedTask<_>| {
@@ -85,7 +83,7 @@ impl SystemsMasterBuilder {
 							f.abort()
 						});
 					}
-					new_task_to_listen_for = tasks_receiver.recv(), if tasks_receiver_has_shut_down => {
+					new_task_to_listen_for = tasks_receiver.recv(), if !tasks_receiver_has_shut_down => {
 						match new_task_to_listen_for {
 							None => {
 								tasks_receiver_has_shut_down = true;
@@ -114,8 +112,8 @@ impl SystemsMasterBuilder {
 							debug!("System {} errored: {kind}, starting shutdown...", res.name);
 							systems_handle.systems.should_stop.cancel();
 							// If user doesn't care about results it's fine
-							let _: Result<_, mpsc::error::SendError<_>> =
-								systems_handle.systems.results_sender.send(SystemError{ system_name: res.name, kind });
+							let _: Result<_, mpsc::error::SendError<_>> = results_sender
+								.send(SystemError{ system_name: res.name, kind });
 						}
 						if tasks_receiver_has_shut_down && all_systems.is_empty() {
 							trace!("Received last result - exiting system management task");
@@ -179,30 +177,40 @@ impl<E> std::ops::Deref for SystemsMaster<E> {
 }
 
 impl<E: Send + fmt::Debug + 'static> SystemsHandle<E> {
-	pub fn spawn<F, Fut>(&self, system_name: impl Into<String>, f: F)
+	pub fn spawn<F, Fut>(&self, system_name: impl Into<String>, f: F) -> Result<(), SystemsAreStopping<()>>
 	where
 		F: FnOnce(SystemsHandle<E>) -> Fut,
 		Fut: Future<Output = Result<(), E>> + Send + 'static,
 	{
-		self.spawn_handle(system_name, || tokio::task::spawn(f(self.clone())))
+		self.spawn_advanced(system_name, (), |()| tokio::task::spawn(f(self.clone())))
 	}
 
-	pub fn spawn_handle(&self, system_name: impl Into<String>, spawn: impl FnOnce() -> JoinHandle<Result<(), E>>) {
+	pub fn spawn_advanced<SystemType, SpawnFn>(
+		&self,
+		system_name: impl Into<String>,
+		system_type: SystemType,
+		spawn: SpawnFn,
+	) -> Result<(), SystemsAreStopping<SystemType>>
+	where
+		SpawnFn: FnOnce(SystemType) -> JoinHandle<Result<(), E>>,
+	{
 		let name = system_name.into();
 		let tasks_sender_guard = self.systems.tasks_sender.load();
 		if let Some(tasks_sender) = &*tasks_sender_guard {
 			trace!("Spawning task {name}");
-			let task = spawn();
+			let task = spawn(system_type);
 			tasks_sender
 				.send(NamedTask { name: Some(name), task })
 				.expect("Receiving end of the tasks shouldn't have stopped by itself");
+			Ok(())
 		} else {
 			// If user doesn't care about results it's fine
 			trace!("Not spawning task {name} because already stopping");
-			let _: Result<_, mpsc::error::SendError<_>> = self.systems.results_sender.send(SystemError {
+			Err(SystemsAreStopping {
 				system_name: name,
-				kind: SystemErrorKind::NotStarted,
-			});
+				system_that_failed_to_start: system_type,
+				_private: (),
+			})
 		}
 	}
 }

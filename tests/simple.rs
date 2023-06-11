@@ -25,14 +25,16 @@ async fn simple() {
 		time::sleep(Duration::from_millis(500)).await;
 		handle.start_shutdown();
 	});
-	master.spawn("S1", |handle| async move {
-		info!("Started task");
-		time::sleep(Duration::from_secs(1)).await;
-		info!("Slept");
-		handle.on_shutdown().await;
-		info!("Got shutdown msg");
-		Ok(())
-	});
+	master
+		.spawn("S1", |handle| async move {
+			info!("Started task");
+			time::sleep(Duration::from_secs(1)).await;
+			info!("Slept");
+			handle.on_shutdown().await;
+			info!("Got shutdown msg");
+			Ok(())
+		})
+		.unwrap();
 	master.with_errors(|e| panic!("{e}")).await.unwrap();
 	let elapsed = start.elapsed();
 	assert!(elapsed < Duration::from_millis(1100) && elapsed > Duration::from_millis(900));
