@@ -1,0 +1,37 @@
+use {futures::prelude::*, tokio::task::JoinHandle};
+
+use crate::results::*;
+
+pin_project_lite::pin_project! {
+	#[derive(Debug)]
+	pub(crate) struct NamedTask<E> {
+		pub(crate) name: String,
+		#[pin]
+		pub(crate) task: JoinHandle<Result<(), E>>,
+	}
+}
+
+impl<E> NamedTask<E> {
+	pub(crate) fn abort(&self) {
+		self.task.abort()
+	}
+}
+
+impl<E> Future for NamedTask<E> {
+	type Output = TaskResult<E>;
+
+	fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+		let this = self.project();
+		match JoinHandle::poll(this.task, cx) {
+			std::task::Poll::Ready(res) => std::task::Poll::Ready(TaskResult {
+				name: std::mem::take(this.name),
+				result: match res {
+					Ok(Ok(())) => Ok(()),
+					Ok(Err(e)) => Err(SystemErrorKind::UserError(e)),
+					Err(e) => Err(SystemErrorKind::TokioJoinError(e)),
+				},
+			}),
+			std::task::Poll::Pending => std::task::Poll::Pending,
+		}
+	}
+}
