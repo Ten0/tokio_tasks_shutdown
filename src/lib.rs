@@ -17,9 +17,10 @@ pub struct SystemsMaster<E> {
 	systems_management_task: JoinHandle<()>,
 }
 
+#[derive(Debug, Default)]
 pub struct SystemsMasterBuilder {
 	timeout: Option<std::time::Duration>,
-	catch_signals: bool,
+	dont_catch_signals: bool,
 }
 
 pub struct SystemsHandle<E> {
@@ -55,6 +56,7 @@ impl SystemsMasterBuilder {
 		};
 
 		let systems_handle_clone = systems_handle.clone();
+		let catch_signals = !self.dont_catch_signals;
 
 		let systems_management_task = tokio::task::spawn(async move {
 			let mut all_systems = FuturesUnordered::new();
@@ -71,8 +73,8 @@ impl SystemsMasterBuilder {
 			loop {
 				tokio::select! {
 					biased;
-					_ = signal::ctrl_c() => {
-						systems_handle.shutdown();
+					_ = signal::ctrl_c(), if catch_signals => {
+						systems_handle.start_shutdown();
 					}
 					_ = &mut shutdown_timeout, if self.timeout.is_some() => {
 						error!("Graceful stopping timeout reached - aborting tasks");
@@ -120,8 +122,12 @@ impl SystemsMasterBuilder {
 }
 
 impl<E: Send + 'static> SystemsMaster<E> {
-	pub fn handle(&self) -> &SystemsHandle<E> {
-		&self.handle
+	/// Create a new handle to this master
+	///
+	/// Note that the master has Deref on the Handle, so if you already have the master
+	/// at hand, you don't need to spawn a handle.
+	pub fn handle(&self) -> SystemsHandle<E> {
+		self.handle.clone()
 	}
 
 	/// Wait for the systems to close, doing something with the errors as they are encountered
@@ -151,12 +157,28 @@ impl<E: Send + 'static> SystemsMaster<E> {
 	}
 }
 
+impl<E> std::ops::Deref for SystemsMaster<E> {
+	type Target = SystemsHandle<E>;
+
+	fn deref(&self) -> &Self::Target {
+		&self.handle
+	}
+}
+
 impl<E: Send + fmt::Debug + 'static> SystemsHandle<E> {
-	pub fn spawn(&self, system_name: impl Into<String>, f: impl Future<Output = Result<(), E>> + Send + 'static) {
+	pub fn spawn<F, Fut>(&self, system_name: impl Into<String>, f: F)
+	where
+		F: FnOnce(SystemsHandle<E>) -> Fut,
+		Fut: Future<Output = Result<(), E>> + Send + 'static,
+	{
+		self.spawn_handle(system_name, || tokio::task::spawn(f(self.clone())))
+	}
+
+	pub fn spawn_handle(&self, system_name: impl Into<String>, spawn: impl FnOnce() -> JoinHandle<Result<(), E>>) {
 		let name = system_name.into();
 		let tasks_sender_guard = self.systems.tasks_sender.load();
 		if let Some(tasks_sender) = &*tasks_sender_guard {
-			let task = tokio::task::spawn(f);
+			let task = spawn();
 			tasks_sender
 				.send(NamedTask { name, task })
 				.expect("Receiving end of the tasks shouldn't have stopped by itself");
@@ -171,18 +193,24 @@ impl<E: Send + fmt::Debug + 'static> SystemsHandle<E> {
 }
 
 impl<E> SystemsHandle<E> {
-	pub fn shutdown(&self) {
+	pub fn start_shutdown(&self) {
 		self.systems.should_stop.cancel();
 		self.systems.tasks_sender.store(None);
+	}
+
+	pub fn on_shutdown(&self) -> tokio_util::sync::WaitForCancellationFuture<'_> {
+		self.systems.should_stop.cancelled()
 	}
 }
 
 impl SystemsMasterBuilder {
-	pub fn timeout(&mut self, timeout: std::time::Duration) {
+	pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
 		self.timeout = Some(timeout);
+		self
 	}
 
-	pub fn catch_signals(&mut self) {
-		self.catch_signals = true;
+	pub fn dont_catch_signals(mut self) -> Self {
+		self.dont_catch_signals = true;
+		self
 	}
 }
