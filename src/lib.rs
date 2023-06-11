@@ -1,11 +1,13 @@
 mod named_task;
 mod results;
 
-use {named_task::NamedTask, results::*};
+pub use results::*;
+
+use named_task::NamedTask;
 
 use {
 	futures::{prelude::*, stream::futures_unordered::FuturesUnordered},
-	log::{debug, trace, warn},
+	log::{debug, error, trace, warn},
 	std::{fmt, sync::Arc},
 	tokio::{signal, sync::mpsc, task::JoinHandle},
 	tokio_util::sync::CancellationToken,
@@ -88,7 +90,10 @@ impl SystemsMasterBuilder {
 							None => {
 								tasks_receiver_has_shut_down = true;
 								if !all_systems.is_empty() {
-									trace!("All SystemsHandle have been dropped - cancelling everything and exiting");
+									trace!(
+										"New tasks channel closed - \
+											Could be because all SystemsHandle have been dropped - starting shutdown"
+									);
 									systems_handle.start_shutdown();
 								} else {
 									trace!("Task channel closed - exiting system management task");
@@ -109,8 +114,15 @@ impl SystemsMasterBuilder {
 						let res: TaskResult<E> = task_finished.expect("Branch is disabled so we should never get None");
 						trace!("Got result for system {}", res.name);
 						if let Err(kind) = res.result {
-							debug!("System {} errored: {kind}, starting shutdown...", res.name);
-							systems_handle.systems.should_stop.cancel();
+							let is_already_shutting_down = systems_handle.is_shutting_down();
+							error!(
+								"System {} errored: {kind}{}",
+								res.name,
+								if is_already_shutting_down {""} else {", starting shutdown..."}
+							);
+							if !is_already_shutting_down {
+								systems_handle.start_shutdown();
+							}
 							// If user doesn't care about results it's fine
 							let _: Result<_, mpsc::error::SendError<_>> = results_sender
 								.send(SystemError{ system_name: res.name, kind });
@@ -177,7 +189,7 @@ impl<E> std::ops::Deref for SystemsMaster<E> {
 }
 
 impl<E: Send + fmt::Debug + 'static> SystemsHandle<E> {
-	pub fn spawn<F, Fut>(&self, system_name: impl Into<String>, f: F) -> Result<(), SystemsAreStopping<()>>
+	pub fn spawn<F, Fut>(&self, system_name: impl Into<String>, f: F) -> Result<&Self, SystemsAreStopping<()>>
 	where
 		F: FnOnce(SystemsHandle<E>) -> Fut,
 		Fut: Future<Output = Result<(), E>> + Send + 'static,
@@ -190,7 +202,7 @@ impl<E: Send + fmt::Debug + 'static> SystemsHandle<E> {
 		system_name: impl Into<String>,
 		system_type: SystemType,
 		spawn: SpawnFn,
-	) -> Result<(), SystemsAreStopping<SystemType>>
+	) -> Result<&Self, SystemsAreStopping<SystemType>>
 	where
 		SpawnFn: FnOnce(SystemType) -> JoinHandle<Result<(), E>>,
 	{
@@ -202,14 +214,13 @@ impl<E: Send + fmt::Debug + 'static> SystemsHandle<E> {
 			tasks_sender
 				.send(NamedTask { name: Some(name), task })
 				.expect("Receiving end of the tasks shouldn't have stopped by itself");
-			Ok(())
+			Ok(self)
 		} else {
 			// If user doesn't care about results it's fine
 			trace!("Not spawning task {name} because already stopping");
 			Err(SystemsAreStopping {
 				system_name: name,
 				system_that_failed_to_start: system_type,
-				_private: (),
 			})
 		}
 	}
@@ -224,6 +235,10 @@ impl<E> SystemsHandle<E> {
 
 	pub fn on_shutdown(&self) -> tokio_util::sync::WaitForCancellationFuture<'_> {
 		self.systems.should_stop.cancelled()
+	}
+
+	pub fn is_shutting_down(&self) -> bool {
+		self.systems.should_stop.is_cancelled()
 	}
 }
 
