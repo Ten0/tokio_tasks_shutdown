@@ -5,7 +5,7 @@ use crate::results::*;
 pin_project_lite::pin_project! {
 	#[derive(Debug)]
 	pub(crate) struct NamedTask<E> {
-		pub(crate) name: String,
+		pub(crate) name: Option<String>,
 		#[pin]
 		pub(crate) task: JoinHandle<Result<(), E>>,
 	}
@@ -24,7 +24,7 @@ impl<E> Future for NamedTask<E> {
 		let this = self.project();
 		match JoinHandle::poll(this.task, cx) {
 			std::task::Poll::Ready(res) => std::task::Poll::Ready(TaskResult {
-				name: std::mem::take(this.name),
+				name: this.name.take().expect("Shouldn't be polled after resolving"),
 				result: match res {
 					Ok(Ok(())) => Ok(()),
 					Ok(Err(e)) => Err(SystemErrorKind::UserError(e)),

@@ -180,7 +180,7 @@ impl<E: Send + fmt::Debug + 'static> SystemsHandle<E> {
 		if let Some(tasks_sender) = &*tasks_sender_guard {
 			let task = spawn();
 			tasks_sender
-				.send(NamedTask { name, task })
+				.send(NamedTask { name: Some(name), task })
 				.expect("Receiving end of the tasks shouldn't have stopped by itself");
 		} else {
 			// If user doesn't care about results it's fine
