@@ -5,7 +5,7 @@ use {named_task::NamedTask, results::*};
 
 use {
 	futures::{prelude::*, stream::futures_unordered::FuturesUnordered},
-	log::{debug, error, trace},
+	log::{debug, trace, warn},
 	std::{fmt, sync::Arc},
 	tokio::{signal, sync::mpsc, task::JoinHandle},
 	tokio_util::sync::CancellationToken,
@@ -70,6 +70,7 @@ impl SystemsMasterBuilder {
 			};
 			tokio::pin!(shutdown_timeout);
 			let mut aborting = false;
+			let mut tasks_receiver_has_shut_down = false;
 			loop {
 				tokio::select! {
 					biased;
@@ -77,22 +78,29 @@ impl SystemsMasterBuilder {
 						systems_handle.start_shutdown();
 					}
 					_ = &mut shutdown_timeout, if self.timeout.is_some() => {
-						error!("Graceful stopping timeout reached - aborting tasks");
+						warn!("Graceful stopping timeout reached - aborting tasks");
 						aborting = true;
-						all_systems.iter_mut().for_each(|f: &mut NamedTask<_>| f.abort());
+						all_systems.iter_mut().for_each(|f: &mut NamedTask<_>| {
+							trace!("Aborting task {}", f.name());
+							f.abort()
+						});
 					}
-					new_task_to_listen_for = tasks_receiver.recv() => {
+					new_task_to_listen_for = tasks_receiver.recv(), if tasks_receiver_has_shut_down => {
 						match new_task_to_listen_for {
 							None => {
+								tasks_receiver_has_shut_down = true;
 								if !all_systems.is_empty() {
 									trace!("All SystemsHandle have been dropped - cancelling everything and exiting");
-									all_systems.iter_mut();
+									systems_handle.start_shutdown();
 								} else {
+									trace!("Task channel closed - exiting system management task");
 									break;
 								}
 							}
 							Some(new_task) => {
+								trace!("Registering task: {}", new_task.name());
 								if aborting {
+									trace!("We are already stopping, so {} will be aborted right away", new_task.name());
 									new_task.abort();
 								}
 								all_systems.push(new_task);
@@ -101,12 +109,17 @@ impl SystemsMasterBuilder {
 					}
 					task_finished = all_systems.next(), if !all_systems.is_empty() => {
 						let res: TaskResult<E> = task_finished.expect("Branch is disabled so we should never get None");
+						trace!("Got result for system {}", res.name);
 						if let Err(kind) = res.result {
 							debug!("System {} errored: {kind}, starting shutdown...", res.name);
 							systems_handle.systems.should_stop.cancel();
 							// If user doesn't care about results it's fine
 							let _: Result<_, mpsc::error::SendError<_>> =
 								systems_handle.systems.results_sender.send(SystemError{ system_name: res.name, kind });
+						}
+						if tasks_receiver_has_shut_down && all_systems.is_empty() {
+							trace!("Received last result - exiting system management task");
+							break;
 						}
 					}
 				};
@@ -178,12 +191,14 @@ impl<E: Send + fmt::Debug + 'static> SystemsHandle<E> {
 		let name = system_name.into();
 		let tasks_sender_guard = self.systems.tasks_sender.load();
 		if let Some(tasks_sender) = &*tasks_sender_guard {
+			trace!("Spawning task {name}");
 			let task = spawn();
 			tasks_sender
 				.send(NamedTask { name: Some(name), task })
 				.expect("Receiving end of the tasks shouldn't have stopped by itself");
 		} else {
 			// If user doesn't care about results it's fine
+			trace!("Not spawning task {name} because already stopping");
 			let _: Result<_, mpsc::error::SendError<_>> = self.systems.results_sender.send(SystemError {
 				system_name: name,
 				kind: SystemErrorKind::NotStarted,
@@ -194,6 +209,7 @@ impl<E: Send + fmt::Debug + 'static> SystemsHandle<E> {
 
 impl<E> SystemsHandle<E> {
 	pub fn start_shutdown(&self) {
+		debug!("Starting graceful shutdown");
 		self.systems.should_stop.cancel();
 		self.systems.tasks_sender.store(None);
 	}

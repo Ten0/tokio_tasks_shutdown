@@ -14,3 +14,4 @@
 
 [dev-dependencies]
 	anyhow = "1"
+	simple_logger = "4"

@@ -15,6 +15,12 @@ impl<E> NamedTask<E> {
 	pub(crate) fn abort(&self) {
 		self.task.abort()
 	}
+
+	pub(crate) fn name(&self) -> &str {
+		self.name
+			.as_deref()
+			.expect("There until resolved, and should be consumed when resolved")
+	}
 }
 
 impl<E> Future for NamedTask<E> {
