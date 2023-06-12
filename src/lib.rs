@@ -21,7 +21,7 @@
 //!
 //! // Spawn tasks
 //! tasks
-//! 	.spawn("kind_task", |tasks_handle| async move {
+//! 	.spawn("gracefully_shutting_down_task", |tasks_handle| async move {
 //! 		loop {
 //! 			tokio::select! {
 //! 				biased;
@@ -37,7 +37,7 @@
 //! 		Ok(())
 //! 	})
 //! 	.unwrap();
-//! // Note that calls can be chained
+//! // Note that calls can be chained since `spawn` returns `&TasksHandle`
 //!
 //! // Let's make sure there were no errors
 //! tasks.join_all().await.unwrap();
