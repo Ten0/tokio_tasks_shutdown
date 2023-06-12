@@ -404,8 +404,23 @@ impl TasksBuilder {
 	///
 	/// If that doesn't make them yield after an extra `task_abort_timeout` and you are running on the multi-threaded
 	/// `tokio` runtime, they will *typically* be left dangling, and the [`join_all`](TasksMainHandle::join_all)
-	/// function will still return. This is not 100% reliable because if `tokio` has assigned your freezing-not-yielding
-	/// task to the same thread as the task that monitors this timeout, it will still freeze.
+	/// function will still return. This is
+	/// [typically](https://github.com/tokio-rs/tokio/issues/4730#issuecomment-1147165954)
+	/// not 100% reliable because if `tokio` has assigned your freezing-not-yielding
+	/// task to the same thread as the task that monitors this timeout, it may still freeze.
+	///
+	/// To make it 100% reliable, use:
+	/// ```rust
+	/// # tokio_test::block_on(async {
+	/// // Apply the workaround described at https://github.com/tokio-rs/tokio/issues/4730#issuecomment-1147165954
+	/// // to make `task_abort_timeout` 100% reliable
+	/// let rt_handle = tokio::runtime::Handle::current();
+	/// std::thread::spawn(move || loop {
+	/// 	std::thread::sleep(std::time::Duration::from_millis(10));
+	/// 	rt_handle.spawn(std::future::ready(()));
+	/// });
+	/// # })
+	/// ```
 	///
 	/// (If you are not on a multi-threaded tokio runtime, a freezing task that would never yield would always prevent
 	/// this `task_abort_timeout` from executing)

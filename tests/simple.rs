@@ -49,6 +49,14 @@ async fn simple() {
 async fn more_complex() {
 	init_log();
 
+	// Apply the workaround described at https://github.com/tokio-rs/tokio/issues/4730#issuecomment-1147165954
+	// to make `task_abort_timeout` 100% reliable
+	let rt_handle = tokio::runtime::Handle::current();
+	std::thread::spawn(move || loop {
+		std::thread::sleep(Duration::from_millis(10));
+		rt_handle.spawn(std::future::ready(()));
+	});
+
 	let start = std::time::Instant::now();
 	let master = TasksBuilder::default()
 		.dont_catch_signals()
