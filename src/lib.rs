@@ -6,14 +6,14 @@
 //!
 //! # tokio_test::block_on(async {
 //! # let start = std::time::Instant::now();
-//! // By default this will catch signals.
+//! // By default this will catch Ctrl+C.
 //! // You may have your tasks return your own error type.
-//! let tasks = TasksBuilder::default()
+//! let tasks: TasksMainHandle<anyhow::Error> = TasksBuilder::default()
 //! 	.timeouts(Some(Duration::from_secs(2)), Some(Duration::from_millis(500)))
-//! 	.build::<anyhow::Error>();
+//! 	.build();
 //!
 //! // Let's simulate a Ctrl+C after some time
-//! let tasks_handle = tasks.handle();
+//! let tasks_handle: TasksHandle<_> = tasks.handle();
 //! tokio::task::spawn(async move {
 //! 	sleep(Duration::from_millis(150)).await;
 //! 	tasks_handle.start_shutdown();
@@ -35,6 +35,8 @@
 //! 			}
 //! 		}
 //! 		Ok(())
+//! 		// Note that if a task were to error, graceful shutdown would be initiated.
+//! 		// This behavior can be disabled.
 //! 	})
 //! 	.unwrap();
 //! // Note that calls can be chained since `spawn` returns `&TasksHandle`
@@ -77,11 +79,12 @@ pub struct TasksMainHandle<E> {
 }
 
 /// Builder for the set of tasks [`TasksMainHandle`]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TasksBuilder {
 	graceful_shutdown_timeout: Option<std::time::Duration>,
 	task_abort_timeout: Option<std::time::Duration>,
-	dont_catch_signals: bool,
+	catch_signals: bool,
+	shutdown_if_a_task_errors: bool,
 }
 
 /// Handle to a set of tasks.
@@ -108,6 +111,8 @@ struct TasksInner<E> {
 
 impl TasksBuilder {
 	/// Build the [`TasksMainHandle`], that can then be used to spawn tasks and obtain their results
+	///
+	/// [`Display`](fmt::Display) is required on `E` because an error would be printed out to [`log`].
 	pub fn build<E: Send + fmt::Display + 'static>(self) -> TasksMainHandle<E> {
 		let (tasks_sender, mut tasks_receiver) = mpsc::unbounded_channel::<NamedTask<E>>();
 		let (results_sender, results_receiver) = mpsc::unbounded_channel::<TaskError<E>>();
@@ -121,7 +126,6 @@ impl TasksBuilder {
 		};
 
 		let tasks_handle_clone = tasks_handle.clone();
-		let catch_signals = !self.dont_catch_signals;
 
 		let management_task = tokio::task::spawn(async move {
 			let mut all_tasks = FuturesUnordered::new();
@@ -150,7 +154,7 @@ impl TasksBuilder {
 			loop {
 				tokio::select! {
 					biased;
-					_ = signal::ctrl_c(), if catch_signals => {
+					_ = signal::ctrl_c(), if self.catch_signals => {
 						tasks_handle.start_shutdown();
 					}
 					_ = &mut shutdown_timeout, if !aborting && self.graceful_shutdown_timeout.is_some() => {
@@ -186,13 +190,13 @@ impl TasksBuilder {
 						let res: TaskResult<E> = task_finished.expect("Branch is disabled so we should never get None");
 						trace!("Got result for task {}", res.name);
 						if let Err(kind) = res.result {
-							let is_already_shutting_down = tasks_handle.is_shutting_down();
+							let shutting_down = self.shutdown_if_a_task_errors && !tasks_handle.is_shutting_down();
 							error!(
 								"Task {} errored: {kind}{}",
 								res.name,
-								if is_already_shutting_down {""} else {", starting shutdown..."}
+								if shutting_down {", starting shutdown..."} else {""}
 							);
-							if !is_already_shutting_down {
+							if shutting_down {
 								tasks_handle.start_shutdown();
 							}
 							// If user doesn't care about results it's fine
@@ -381,6 +385,17 @@ impl<E> TasksHandle<E> {
 	}
 }
 
+impl Default for TasksBuilder {
+	fn default() -> Self {
+		Self {
+			graceful_shutdown_timeout: None,
+			task_abort_timeout: None,
+			catch_signals: true,
+			shutdown_if_a_task_errors: true,
+		}
+	}
+}
+
 impl TasksBuilder {
 	/// Set timeouts for graceful shutdown and tokio task abort
 	///
@@ -388,11 +403,14 @@ impl TasksBuilder {
 	/// [`abort`](tokio::task::JoinHandle::abort)ed.
 	///
 	/// If that doesn't make them yield after an extra `task_abort_timeout` and you are running on the multi-threaded
-	/// `tokio` runtime, they will be left dangling, and the [`join_all`](TasksMainHandle::join_all) function will still
-	/// return.
+	/// `tokio` runtime, they will *typically* be left dangling, and the [`join_all`](TasksMainHandle::join_all)
+	/// function will still return. This is not 100% reliable because if `tokio` has assigned your freezing-not-yielding
+	/// task to the same thread as the task that monitors this timeout, it will still freeze.
 	///
-	/// (If you are not on a multi-threaded tokio runtime, a freezing task that would never yield would prevent even
+	/// (If you are not on a multi-threaded tokio runtime, a freezing task that would never yield would always prevent
 	/// this `task_abort_timeout` from executing)
+	///
+	/// (See [`tokio#4730`](https://github.com/tokio-rs/tokio/issues/4730) for more details)
 	pub fn timeouts(
 		mut self,
 		graceful_shutdown_timeout: Option<std::time::Duration>,
@@ -407,7 +425,15 @@ impl TasksBuilder {
 	///
 	/// By default, Ctrl+C will initiate a shutdown
 	pub fn dont_catch_signals(mut self) -> Self {
-		self.dont_catch_signals = true;
+		self.catch_signals = false;
+		self
+	}
+
+	/// Disable graceful shutdown when one task returns an error
+	///
+	/// By default, if any task returns `Err(_)`, the system will gracefully shutdown immediately.
+	pub fn dont_shutdown_if_a_task_errors(mut self) -> Self {
+		self.shutdown_if_a_task_errors = false;
 		self
 	}
 }
