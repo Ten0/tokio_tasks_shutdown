@@ -40,7 +40,7 @@ async fn simple() {
 			Ok(())
 		})
 		.unwrap();
-	master.with_errors(|e| panic!("{e}")).await.unwrap();
+	master.join_all_with(|e| panic!("{e}")).await.unwrap();
 	let elapsed = start.elapsed();
 	assert!(elapsed > Duration::from_millis(900) && elapsed < Duration::from_millis(1100));
 }
@@ -88,7 +88,7 @@ async fn more_complex() {
 		})
 		.unwrap();
 	let mut errors = Vec::new();
-	let _: Result<(), results::AtLeastOneTaskErrored> = master.with_errors(|e| errors.push(e)).await;
+	let _: Result<(), results::AtLeastOneTaskErrored> = master.join_all_with(|e| errors.push(e)).await;
 	let elapsed = start.elapsed();
 	errors.sort_by(|a, b| a.task_name().cmp(b.task_name()));
 	let patterns = &[

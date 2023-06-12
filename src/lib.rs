@@ -40,7 +40,7 @@
 //! // Note that calls can be chained
 //!
 //! // Let's make sure there were no errors
-//! tasks.with_errors(|e| panic!("{e}")).await.unwrap();
+//! tasks.join_all().await.unwrap();
 //!
 //! # let test_duration = start.elapsed();
 //! assert!(
@@ -219,17 +219,42 @@ impl<E: Send + 'static> TasksMainHandle<E> {
 		self.handle.clone()
 	}
 
-	/// Wait for the tasks to finish, doing something with the errors as they are encountered
-	pub async fn with_errors(self, mut f: impl FnMut(TaskError<E>)) -> Result<(), AtLeastOneTaskErrored> {
-		self.with_errors_async(|e| {
-			f(e);
-			future::ready(())
-		})
-		.await
+	/// Wait for the tasks to finish
+	///
+	/// Tasks that have errored will be displayed in [`log`] at the `Error` level.
+	///
+	/// If you need to get at least one of those, use [`join_all_with`](TasksMainHandle::join_all_with) or
+	/// [`join_all_yielding_on_first_error`](TasksMainHandle::join_all_yielding_on_first_error)
+	pub async fn join_all(self) -> Result<(), AtLeastOneTaskErrored> {
+		self.join_all_with(|_| {}).await
+	}
+
+	/// Wait for the tasks to finish
+	///
+	/// As soon as at least one error is returned, this will yield, letting the rest of the tasks
+	/// close later
+	pub async fn join_all_yielding_on_first_error(&mut self) -> Result<(), TaskError<E>> {
+		if let Some(e) = self.results_receiver.recv().await {
+			Err(e)
+		} else {
+			self.ensure_management_task_closes_properly().await;
+			Ok(())
+		}
 	}
 
 	/// Wait for the tasks to finish, doing something with the errors as they are encountered
-	pub async fn with_errors_async<F, Fut>(mut self, mut f: F) -> Result<(), AtLeastOneTaskErrored>
+	pub async fn join_all_with(mut self, mut f: impl FnMut(TaskError<E>)) -> Result<(), AtLeastOneTaskErrored> {
+		let mut res = Ok(());
+		while let Some(e) = self.results_receiver.recv().await {
+			res = Err(AtLeastOneTaskErrored { _private: () });
+			f(e);
+		}
+		self.ensure_management_task_closes_properly().await;
+		res
+	}
+
+	/// Wait for the tasks to finish, doing something with the errors as they are encountered
+	pub async fn join_all_with_async<F, Fut>(mut self, mut f: F) -> Result<(), AtLeastOneTaskErrored>
 	where
 		F: FnMut(TaskError<E>) -> Fut,
 		Fut: Future<Output = ()>,
@@ -239,12 +264,16 @@ impl<E: Send + 'static> TasksMainHandle<E> {
 			res = Err(AtLeastOneTaskErrored { _private: () });
 			f(e).await;
 		}
-		self.management_task
-			.take()
-			.expect("Only this function touches this variable, and it takes ownership")
-			.await
-			.expect("Task management task did not close successfully");
+		self.ensure_management_task_closes_properly().await;
 		res
+	}
+
+	async fn ensure_management_task_closes_properly(&mut self) {
+		if let Some(management_task) = self.management_task.take() {
+			management_task
+				.await
+				.expect("Task management task did not close successfully");
+		}
 	}
 }
 

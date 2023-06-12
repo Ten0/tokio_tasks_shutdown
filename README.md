@@ -46,7 +46,7 @@ tasks
 // Note that calls can be chained
 
 // Let's make sure there were no errors
-tasks.with_errors(|e| panic!("{e}")).await.unwrap();
+tasks.join_all().await.unwrap();
 ```
 
 In this example, the task will have run one loop already (sleep has hit at t=100ms) when asked for graceful
