@@ -286,6 +286,9 @@ impl<E> std::ops::Deref for TasksMainHandle<E> {
 }
 
 impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
+	/// Spawn a future on the tokio runtime if the Tasks aren't already stopping
+	///
+	/// The future should be built from the provided [`TasksHandle`], and most likely monitor graceful shutdown status.
 	pub fn spawn<F, Fut>(&self, task_name: impl Into<String>, f: F) -> Result<&Self, TasksAreStopping<()>>
 	where
 		F: FnOnce(TasksHandle<E>) -> Fut,
@@ -294,6 +297,18 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 		self.spawn_advanced(task_name, (), |()| tokio::task::spawn(f(self.clone())))
 	}
 
+	/// Spawn a blocking task on the tokio runtime if the Tasks aren't already stopping
+	pub fn spawn_blocking<F>(&self, task_name: impl Into<String>, f: F) -> Result<&Self, TasksAreStopping<()>>
+	where
+		F: FnOnce(TasksHandle<E>) -> Result<(), E> + Send + 'static,
+	{
+		self.spawn_advanced(task_name, (), |()| {
+			let handle = self.clone();
+			tokio::task::spawn_blocking(move || f(handle))
+		})
+	}
+
+	/// A more flexible version of `spawn`
 	pub fn spawn_advanced<TaskType, SpawnFn>(
 		&self,
 		task_name: impl Into<String>,
@@ -330,21 +345,30 @@ impl<E> TasksHandle<E> {
 		self.inner.tasks_sender.store(None);
 	}
 
+	/// This future will resolve when graceful shutdown was asked
 	pub fn on_shutdown(&self) -> tokio_util::sync::WaitForCancellationFuture<'_> {
 		self.inner.should_stop.cancelled()
 	}
 
+	/// Whether graceful shutdown was asked
 	pub fn is_shutting_down(&self) -> bool {
 		self.inner.should_stop.is_cancelled()
 	}
 }
 
 impl TasksBuilder {
+	/// Set timeout for graceful shutdown
+	///
+	/// If timeout is exceeded after asking for graceful shutdown, tokio tasks will be
+	/// [`abort`](tokio::task::JoinHandle::abort)ed.
 	pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
 		self.timeout = Some(timeout);
 		self
 	}
 
+	/// Disable graceful shutdown on Ctrl+C
+	///
+	/// By default, Ctrl+C will initiate a shutdown
 	pub fn dont_catch_signals(mut self) -> Self {
 		self.dont_catch_signals = true;
 		self
