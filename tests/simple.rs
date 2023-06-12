@@ -88,7 +88,7 @@ async fn more_complex() {
 		})
 		.unwrap();
 	let mut errors = Vec::new();
-	let _: Result<(), AtLeastOneSystemErrored> = master.with_errors(|e| errors.push(e)).await;
+	let _: Result<(), results::AtLeastOneSystemErrored> = master.with_errors(|e| errors.push(e)).await;
 	let elapsed = start.elapsed();
 	errors.sort_by(|a, b| a.system_name().cmp(b.system_name()));
 	let patterns = &[

@@ -16,3 +16,4 @@
 	anyhow = "1"
 	regex = "1"
 	simple_logger = "4"
+	tokio-test = "0.4"

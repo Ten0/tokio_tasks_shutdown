@@ -1,7 +1,60 @@
-mod named_task;
-mod results;
+//! Easily manage tokio tasks and their return statuses
+//!
+//! # Example
+//! ```
+//! use {async_systems_shutdown::*, std::time::Duration, tokio::time::sleep};
+//!
+//! # tokio_test::block_on(async {
+//! # let start = std::time::Instant::now();
+//! // By default this will catch signals.
+//! // You may have your tasks return your own error type.
+//! let master = SystemsMasterBuilder::default()
+//! 	.timeout(Duration::from_secs(2))
+//! 	.build::<anyhow::Error>();
+//!
+//! // Let's simulate a Ctrl+C after some time
+//! let handle = master.handle();
+//! tokio::task::spawn(async move {
+//! 	sleep(Duration::from_millis(150)).await;
+//! 	handle.start_shutdown();
+//! });
+//!
+//! // Spawn systems
+//! master
+//! 	.spawn("kind_system", |handle| async move {
+//! 		loop {
+//! 			tokio::select! {
+//! 				biased;
+//! 				_ = handle.on_shutdown() => {
+//! 					// We have been kindly asked to shutdown, let's exit
+//! 					break;
+//! 				}
+//! 				_ = sleep(Duration::from_millis(100)) => {
+//! 					// Simulating another task running concurrently, e.g. listening on a channel...
+//! 				}
+//! 			}
+//! 		}
+//! 		Ok(())
+//! 	})
+//! 	.unwrap();
+//!
+//! // Let's make sure there were no errors
+//! master.with_errors(|e| panic!("{e}")).await.unwrap();
+//!
+//! # let test_duration = start.elapsed();
+//! assert!(
+//! 	test_duration > Duration::from_millis(145) && test_duration < Duration::from_millis(155)
+//! );
+//! # })
+//! ```
+//!
+//! In this example, the system will have run one loop already (sleep has hit at t=100ms) when asked for graceful
+//! shutdown at t=150ms, which will immediately make it gracefully shut down.
 
-pub use results::*;
+mod named_task;
+pub mod results;
+
+use results::*;
 
 use named_task::NamedTask;
 
@@ -13,18 +66,26 @@ use {
 	tokio_util::sync::CancellationToken,
 };
 
+/// Single master for all the systems, used to collect their results
 pub struct SystemsMaster<E> {
 	results: mpsc::UnboundedReceiver<SystemError<E>>,
 	handle: SystemsHandle<E>,
 	systems_management_task: JoinHandle<()>,
 }
 
+/// Builder for a SystemsMaster
 #[derive(Debug, Default)]
 pub struct SystemsMasterBuilder {
 	timeout: Option<std::time::Duration>,
 	dont_catch_signals: bool,
 }
 
+/// Handle to a set of systems
+///
+/// Access to spawning and shutting down, but not to getting results of finished systems:
+/// only the master has access to that.
+///
+/// If all handles to a system have been dropped, system shutdown will be initiated. (The master counts as a handle.)
 pub struct SystemsHandle<E> {
 	systems: Arc<Systems<E>>,
 }
@@ -43,6 +104,7 @@ struct Systems<E> {
 }
 
 impl SystemsMasterBuilder {
+	/// Build the `SystemsMaster`, that can then be used to spawn tasks
 	pub fn build<E: Send + fmt::Display + 'static>(self) -> SystemsMaster<E> {
 		let (tasks_sender, mut tasks_receiver) = mpsc::unbounded_channel::<NamedTask<E>>();
 		let (results_sender, results_receiver) = mpsc::unbounded_channel::<SystemError<E>>();
