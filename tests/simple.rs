@@ -23,7 +23,7 @@ async fn simple() {
 	let start = std::time::Instant::now();
 	let master = TasksBuilder::default()
 		.dont_catch_signals()
-		.timeout(Duration::from_secs(2))
+		.timeouts(Some(Duration::from_secs(2)), Some(Duration::from_millis(500)))
 		.build::<InternalError>();
 	let handle = master.handle();
 	tokio::task::spawn(async move {
@@ -52,7 +52,7 @@ async fn more_complex() {
 	let start = std::time::Instant::now();
 	let master = TasksBuilder::default()
 		.dont_catch_signals()
-		.timeout(Duration::from_secs(2))
+		.timeouts(Some(Duration::from_secs(2)), Some(Duration::from_millis(500)))
 		.build::<InternalError>();
 	let handle = master.handle();
 	tokio::task::spawn(async move {

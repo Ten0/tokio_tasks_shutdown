@@ -9,7 +9,7 @@
 //! // By default this will catch signals.
 //! // You may have your tasks return your own error type.
 //! let tasks = TasksBuilder::default()
-//! 	.timeout(Duration::from_secs(2))
+//! 	.timeouts(Some(Duration::from_secs(2)), Some(Duration::from_millis(500)))
 //! 	.build::<anyhow::Error>();
 //!
 //! // Let's simulate a Ctrl+C after some time
@@ -79,7 +79,8 @@ pub struct TasksMainHandle<E> {
 /// Builder for the set of tasks [`TasksMainHandle`]
 #[derive(Debug, Default)]
 pub struct TasksBuilder {
-	timeout: Option<std::time::Duration>,
+	graceful_shutdown_timeout: Option<std::time::Duration>,
+	task_abort_timeout: Option<std::time::Duration>,
 	dont_catch_signals: bool,
 }
 
@@ -125,7 +126,7 @@ impl TasksBuilder {
 		let management_task = tokio::task::spawn(async move {
 			let mut all_tasks = FuturesUnordered::new();
 			let shutdown_timeout = async {
-				if let Some(timeout) = self.timeout {
+				if let Some(timeout) = self.graceful_shutdown_timeout {
 					tasks_handle.inner.should_stop.cancelled().await;
 					tokio::time::sleep(timeout).await
 				} else {
@@ -141,7 +142,7 @@ impl TasksBuilder {
 					_ = signal::ctrl_c(), if catch_signals => {
 						tasks_handle.start_shutdown();
 					}
-					_ = &mut shutdown_timeout, if !aborting && self.timeout.is_some() => {
+					_ = &mut shutdown_timeout, if !aborting && self.graceful_shutdown_timeout.is_some() => {
 						warn!("Graceful stopping timeout reached - aborting tasks");
 						aborting = true;
 						all_tasks.iter_mut().for_each(|f: &mut NamedTask<_>| {
@@ -357,12 +358,20 @@ impl<E> TasksHandle<E> {
 }
 
 impl TasksBuilder {
-	/// Set timeout for graceful shutdown
+	/// Set timeouts for graceful shutdown and tokio task abort
 	///
 	/// If timeout is exceeded after asking for graceful shutdown, tokio tasks will be
 	/// [`abort`](tokio::task::JoinHandle::abort)ed.
-	pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
-		self.timeout = Some(timeout);
+	///
+	/// If that doesn't make them yield after an extra `task_abort_timeout`, they will be left
+	/// dangling, and the [`join_all`](TasksMainHandle::join_all) function will still return.
+	pub fn timeouts(
+		mut self,
+		graceful_shutdown_timeout: Option<std::time::Duration>,
+		task_abort_timeout: Option<std::time::Duration>,
+	) -> Self {
+		self.graceful_shutdown_timeout = graceful_shutdown_timeout;
+		self.task_abort_timeout = task_abort_timeout;
 		self
 	}
 
