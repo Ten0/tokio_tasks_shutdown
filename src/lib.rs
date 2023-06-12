@@ -12,13 +12,6 @@
 //! 	.timeouts(Some(Duration::from_secs(2)), Some(Duration::from_millis(500)))
 //! 	.build();
 //!
-//! // Let's simulate a Ctrl+C after some time
-//! let tasks_handle: TasksHandle<_> = tasks.handle();
-//! tokio::task::spawn(async move {
-//! 	sleep(Duration::from_millis(150)).await;
-//! 	tasks_handle.start_shutdown();
-//! });
-//!
 //! // Spawn tasks
 //! tasks
 //! 	.spawn("gracefully_shutting_down_task", |tasks_handle| async move {
@@ -30,7 +23,8 @@
 //! 					break;
 //! 				}
 //! 				_ = sleep(Duration::from_millis(100)) => {
-//! 					// Simulating another task running concurrently, e.g. listening on a channel...
+//! 					// Simulating another future running concurrently,
+//! 					// e.g. listening on a channel...
 //! 				}
 //! 			}
 //! 		}
@@ -41,9 +35,17 @@
 //! 	.unwrap();
 //! // Note that calls can be chained since `spawn` returns `&TasksHandle`
 //!
+//! // Let's simulate a Ctrl+C after some time
+//! let tasks_handle: TasksHandle<_> = tasks.handle();
+//! tokio::task::spawn(async move {
+//! 	sleep(Duration::from_millis(150)).await;
+//! 	tasks_handle.start_shutdown();
+//! });
+//!
 //! // Let's make sure there were no errors
 //! tasks.join_all().await.unwrap();
 //!
+//! // Make sure we have shut down when expected
 //! # let test_duration = start.elapsed();
 //! assert!(
 //! 	test_duration > Duration::from_millis(145) && test_duration < Duration::from_millis(155)
