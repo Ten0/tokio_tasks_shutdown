@@ -416,7 +416,7 @@ impl TasksBuilder {
 	/// // to make `task_abort_timeout` 100% reliable
 	/// let rt_handle = tokio::runtime::Handle::current();
 	/// std::thread::spawn(move || loop {
-	/// 	std::thread::sleep(std::time::Duration::from_millis(10));
+	/// 	std::thread::sleep(std::time::Duration::from_millis(500));
 	/// 	rt_handle.spawn(std::future::ready(()));
 	/// });
 	/// # })
