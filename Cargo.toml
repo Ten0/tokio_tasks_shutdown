@@ -1,6 +1,10 @@
 [package]
+	authors = ["Thomas BESSOU <thomas.bessou@hotmail.fr>"]
+	description = "Easily manage and gracefully shutdown tokio tasks while monitoring their return results"
 	edition = "2021"
-	name = "async_systems_shutdown"
+	license = "LGPL-3.0-only"
+	name = "tokio_tasks_shutdown"
+	repository = "https://github.com/Ten0/tokio_tasks_shutdown"
 	version = "0.1.0"
 
 [dependencies]

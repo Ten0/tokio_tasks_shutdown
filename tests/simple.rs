@@ -5,7 +5,7 @@ use {
 	tokio::time::sleep,
 };
 
-use async_systems_shutdown::*;
+use tokio_tasks_shutdown::*;
 
 fn init_log() {
 	match simple_logger::SimpleLogger::new().init() {
@@ -21,7 +21,7 @@ async fn simple() {
 	init_log();
 
 	let start = std::time::Instant::now();
-	let master = SystemsMasterBuilder::default()
+	let master = TasksBuilder::default()
 		.dont_catch_signals()
 		.timeout(Duration::from_secs(2))
 		.build::<InternalError>();
@@ -50,7 +50,7 @@ async fn more_complex() {
 	init_log();
 
 	let start = std::time::Instant::now();
-	let master = SystemsMasterBuilder::default()
+	let master = TasksBuilder::default()
 		.dont_catch_signals()
 		.timeout(Duration::from_secs(2))
 		.build::<InternalError>();
@@ -88,12 +88,12 @@ async fn more_complex() {
 		})
 		.unwrap();
 	let mut errors = Vec::new();
-	let _: Result<(), results::AtLeastOneSystemErrored> = master.with_errors(|e| errors.push(e)).await;
+	let _: Result<(), results::AtLeastOneTaskErrored> = master.with_errors(|e| errors.push(e)).await;
 	let elapsed = start.elapsed();
-	errors.sort_by(|a, b| a.system_name().cmp(b.system_name()));
+	errors.sort_by(|a, b| a.task_name().cmp(b.task_name()));
 	let patterns = &[
-		r#"System S2 errored: User error: O no"#,
-		r#"System S3 errored: Tokio join error: task \d+ was cancelled"#,
+		r#"Task S2 errored: User error: O no"#,
+		r#"Task S3 errored: Tokio join error: task \d+ was cancelled"#,
 	];
 	assert_eq!(patterns.len(), errors.len());
 	assert!(errors

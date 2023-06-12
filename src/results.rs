@@ -1,67 +1,67 @@
-//! Public error/success types around this crate
+//! Public error/success types that may be returned by functions of this crate
 
 pub(crate) struct TaskResult<E> {
 	pub(crate) name: String,
-	pub(crate) result: Result<(), SystemErrorKind<E>>,
+	pub(crate) result: Result<(), TaskErrorKind<E>>,
 }
 
 /// When handling tasks errors individually, you get this, giving details
-/// about what system it was and why exactly it didn't succeed
+/// about what task it was and why exactly it didn't succeed
 #[derive(thiserror::Error)]
-#[error("System {system_name} errored: {kind}")]
-pub struct SystemError<E> {
-	pub(crate) system_name: String,
-	pub(crate) kind: SystemErrorKind<E>,
+#[error("Task {task_name} errored: {kind}")]
+pub struct TaskError<E> {
+	pub(crate) task_name: String,
+	pub(crate) kind: TaskErrorKind<E>,
 }
 
-impl<E> SystemError<E> {
-	pub fn system_name(&self) -> &str {
-		&self.system_name
+impl<E> TaskError<E> {
+	pub fn task_name(&self) -> &str {
+		&self.task_name
 	}
 
-	pub fn kind(&self) -> &SystemErrorKind<E> {
+	pub fn kind(&self) -> &TaskErrorKind<E> {
 		&self.kind
 	}
 
-	pub fn into_kind(self) -> SystemErrorKind<E> {
+	pub fn into_kind(self) -> TaskErrorKind<E> {
 		self.kind
 	}
 }
 
-/// Contained inside a [`SystemError`]
+/// Contained inside a [`TaskError`]
 ///
 /// When handling tasks errors individually, you get this, giving details about why exactly it didn't succeed
 #[derive(thiserror::Error)]
-pub enum SystemErrorKind<E> {
+pub enum TaskErrorKind<E> {
 	#[error("User error: {0}")]
 	UserError(E),
 	#[error("Tokio join error: {0}")]
 	TokioJoinError(tokio::task::JoinError),
 }
 
-/// This error is returned from a "wait for all systems to be finished" on the master if
-/// at least one of the systems has errored when handling the tasks end
+/// This error is returned from a "wait for all tasks to be finished" on the [`TasksMainHandle`](crate::TasksMainHandle)
+/// if at least one of the tasks has errored
 #[derive(thiserror::Error, Debug)]
-#[error("At least one system errored")]
-pub struct AtLeastOneSystemErrored {
+#[error("At least one task errored")]
+pub struct AtLeastOneTaskErrored {
 	pub(crate) _private: (),
 }
 
-/// This error is returned from a [`spawn`](crate::SystemsHandle::spawn) on the master if
+/// This error is returned from a [`spawn`](crate::TasksHandle::spawn) if
 /// we are already shutting down, and consequently can't spawn the task
 #[derive(thiserror::Error, Debug)]
-#[error("Task {system_name} was not spawned because we were already stopping")]
-pub struct SystemsAreStopping<SystemType> {
-	pub(crate) system_name: String,
-	pub(crate) system_that_failed_to_start: SystemType,
+#[error("Task {task_name} was not spawned because we were already stopping")]
+pub struct TasksAreStopping<TaskType> {
+	pub(crate) task_name: String,
+	pub(crate) task_that_failed_to_start: TaskType,
 }
 
-impl<SystemType> SystemsAreStopping<SystemType> {
-	pub fn system_name(&self) -> &str {
-		&self.system_name
+impl<TaskType> TasksAreStopping<TaskType> {
+	pub fn task_name(&self) -> &str {
+		&self.task_name
 	}
 
-	pub fn into_system_that_failed_to_start(self) -> SystemType {
-		self.system_that_failed_to_start
+	pub fn into_task_that_failed_to_start(self) -> TaskType {
+		self.task_that_failed_to_start
 	}
 }

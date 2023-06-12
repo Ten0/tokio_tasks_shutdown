@@ -33,8 +33,8 @@ impl<E> Future for NamedTask<E> {
 				name: this.name.take().expect("Shouldn't be polled after resolving"),
 				result: match res {
 					Ok(Ok(())) => Ok(()),
-					Ok(Err(e)) => Err(SystemErrorKind::UserError(e)),
-					Err(e) => Err(SystemErrorKind::TokioJoinError(e)),
+					Ok(Err(e)) => Err(TaskErrorKind::UserError(e)),
+					Err(e) => Err(TaskErrorKind::TokioJoinError(e)),
 				},
 			}),
 			std::task::Poll::Pending => std::task::Poll::Pending,
