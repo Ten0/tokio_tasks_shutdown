@@ -20,4 +20,5 @@
 	anyhow = "1"
 	regex = "1"
 	simple_logger = "4"
+	tokio = { version = "1", features = ["rt-multi-thread"] }
 	tokio-test = "0.4"

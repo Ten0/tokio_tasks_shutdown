@@ -37,6 +37,8 @@ pub enum TaskErrorKind<E> {
 	UserError(E),
 	#[error("Tokio join error: {0}")]
 	TokioJoinError(tokio::task::JoinError),
+	#[error("Cancel timeout exceeded - left task dangle")]
+	CancelTimeoutExceeded(tokio::task::JoinHandle<Result<(), E>>),
 }
 
 /// This error is returned from a "wait for all tasks to be finished" on the [`TasksMainHandle`](crate::TasksMainHandle)
