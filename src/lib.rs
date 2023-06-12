@@ -134,6 +134,17 @@ impl TasksBuilder {
 				}
 			};
 			tokio::pin!(shutdown_timeout);
+			let exit_letting_tasks_dangle_timeout = async {
+				// The timeout will only start the first time this is polled, after the `aborting`
+				// boolean has been set
+				if let Some(timeout) = self.task_abort_timeout {
+					tasks_handle.inner.should_stop.cancelled().await;
+					tokio::time::sleep(timeout).await
+				} else {
+					future::pending().await
+				}
+			};
+			tokio::pin!(exit_letting_tasks_dangle_timeout);
 			let mut aborting = false;
 			let mut tasks_receiver_has_shut_down = false;
 			loop {
@@ -192,6 +203,19 @@ impl TasksBuilder {
 							trace!("Received last result - exiting management task");
 							break;
 						}
+					}
+					_ = &mut exit_letting_tasks_dangle_timeout, if aborting && tasks_receiver_has_shut_down && self.task_abort_timeout.is_some() => {
+						error!("Abort timeout reached - letting tasks dangle and exiting management task");
+						for task in std::mem::take(&mut all_tasks) {
+							let task_name = task.name.expect("Hasn't resolved");
+							trace!("Sending dangling task error for {task_name}");
+							let _: Result<_, mpsc::error::SendError<_>> = results_sender
+								.send(TaskError{
+									task_name: task_name,
+									kind: TaskErrorKind::CancelTimeoutExceeded(task.task)
+								});
+						}
+						break;
 					}
 				};
 			}
@@ -365,6 +389,7 @@ impl TasksBuilder {
 	///
 	/// If that doesn't make them yield after an extra `task_abort_timeout`, they will be left
 	/// dangling, and the [`join_all`](TasksMainHandle::join_all) function will still return.
+	/// NB: the `task_abort_timeout` will likely only work if you're on a multi-threaded tokio runtime.
 	pub fn timeouts(
 		mut self,
 		graceful_shutdown_timeout: Option<std::time::Duration>,
