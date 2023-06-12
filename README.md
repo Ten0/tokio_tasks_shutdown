@@ -1,11 +1,9 @@
 # tokio_tasks_shutdown
 
-**An idiomatic implementation of serde/avro (de)serialization**
+**Easily manage and gracefully shutdown tokio tasks while monitoring their return results**
 
 [![Crates.io](https://img.shields.io/crates/v/tokio_tasks_shutdown.svg)](https://crates.io/crates/tokio_tasks_shutdown)
 [![License](https://img.shields.io/github/license/Ten0/tokio_tasks_shutdown)](LICENSE)
-
-Easily manage and gracefully shutdown tokio tasks while monitoring their return results
 
 # Example
 
