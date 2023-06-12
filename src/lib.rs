@@ -236,10 +236,10 @@ impl<E> Drop for TasksMainHandle<E> {
 }
 
 impl<E: Send + 'static> TasksMainHandle<E> {
-	/// Create a new handle to this master
+	/// Create a new handle to this set of tasks
 	///
-	/// Note that the master has Deref on the Handle, so if you already have the master
-	/// at hand, you don't need to spawn a handle.
+	/// Note that `TasksMainHandle` has [`Deref`](std::ops::Deref) on the [`TasksHandle`], so if you already have the
+	/// `TasksMainHandle` at hand, you don't need to create a new handle to e.g. [`spawn`](TasksHandle::spawn) a task.
 	pub fn handle(&self) -> TasksHandle<E> {
 		self.handle.clone()
 	}
@@ -387,9 +387,12 @@ impl TasksBuilder {
 	/// If timeout is exceeded after asking for graceful shutdown, tokio tasks will be
 	/// [`abort`](tokio::task::JoinHandle::abort)ed.
 	///
-	/// If that doesn't make them yield after an extra `task_abort_timeout`, they will be left
-	/// dangling, and the [`join_all`](TasksMainHandle::join_all) function will still return.
-	/// NB: the `task_abort_timeout` will likely only work if you're on a multi-threaded tokio runtime.
+	/// If that doesn't make them yield after an extra `task_abort_timeout` and you are running on the multi-threaded
+	/// `tokio` runtime, they will be left dangling, and the [`join_all`](TasksMainHandle::join_all) function will still
+	/// return.
+	///
+	/// (If you are not on a multi-threaded tokio runtime, a freezing task that would never yield would prevent even
+	/// this `task_abort_timeout` from executing)
 	pub fn timeouts(
 		mut self,
 		graceful_shutdown_timeout: Option<std::time::Duration>,

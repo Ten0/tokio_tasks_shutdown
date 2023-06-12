@@ -5,8 +5,9 @@ pub(crate) struct TaskResult<E> {
 	pub(crate) result: Result<(), TaskErrorKind<E>>,
 }
 
-/// When handling tasks errors individually, you get this, giving details
-/// about what task it was and why exactly it didn't succeed
+/// When handling tasks errors individually through
+/// [`TasksMainHandle::join_all_with`](crate::TasksMainHandle::join_all_with), you get this, giving details about what
+/// task it was and why exactly it didn't succeed
 #[derive(thiserror::Error)]
 #[error("Task {task_name} errored: {kind}")]
 pub struct TaskError<E> {
@@ -30,7 +31,9 @@ impl<E> TaskError<E> {
 
 /// Contained inside a [`TaskError`]
 ///
-/// When handling tasks errors individually, you get this, giving details about why exactly it didn't succeed
+/// When handling tasks errors individually through
+/// [`TasksMainHandle::join_all_with`](crate::TasksMainHandle::join_all_with), you get this, giving details about why
+/// exactly it didn't succeed
 #[derive(thiserror::Error)]
 pub enum TaskErrorKind<E> {
 	#[error("User error: {0}")]
@@ -41,7 +44,7 @@ pub enum TaskErrorKind<E> {
 	CancelTimeoutExceeded(tokio::task::JoinHandle<Result<(), E>>),
 }
 
-/// This error is returned from a "wait for all tasks to be finished" on the [`TasksMainHandle`](crate::TasksMainHandle)
+/// This error is returned from the [`TasksMainHandle::join_all`](crate::TasksMainHandle::join_all) methods
 /// if at least one of the tasks has errored
 #[derive(thiserror::Error, Debug)]
 #[error("At least one task errored")]
