@@ -128,3 +128,37 @@ async fn more_complex() {
 	}
 	assert!(elapsed > Duration::from_millis(2900) && elapsed < Duration::from_millis(3100));
 }
+
+#[tokio::test]
+async fn spawn_task_while_stopping() {
+	init_log();
+
+	let start = std::time::Instant::now();
+	let master = TasksBuilder::default()
+		.dont_catch_signals()
+		.timeouts(Some(Duration::from_secs(2)), Some(Duration::from_millis(500)))
+		.build::<InternalError>();
+	let handle = master.handle();
+	tokio::task::spawn(async move {
+		sleep(Duration::from_millis(500)).await;
+		handle.start_shutdown();
+	});
+	master
+		.spawn("S1", |handle| async move {
+			info!("Started task");
+			sleep(Duration::from_secs(1)).await;
+			info!("Slept");
+			handle.on_shutdown().await;
+			sleep(Duration::from_millis(10)).await;
+			handle.spawn("quick_task", |_| async move {
+				sleep(Duration::from_millis(10)).await;
+				Ok(())
+			})?;
+			info!("Got shutdown msg");
+			Ok(())
+		})
+		.unwrap();
+	master.join_all_with(|e| panic!("{e}")).await.unwrap();
+	let elapsed = start.elapsed();
+	assert!(elapsed > Duration::from_millis(900) && elapsed < Duration::from_millis(1100));
+}
