@@ -389,7 +389,11 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 
 impl<E> TasksHandle<E> {
 	pub fn start_shutdown(&self) {
-		debug!("Starting graceful shutdown");
+		if log::log_enabled!(log::Level::Debug) {
+			if !self.inner.should_stop.is_cancelled() {
+				debug!("Starting graceful shutdown");
+			}
+		}
 		self.inner.should_stop.cancel();
 	}
 
