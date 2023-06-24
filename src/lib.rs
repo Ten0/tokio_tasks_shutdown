@@ -461,9 +461,9 @@ impl TasksBuilder {
 		self
 	}
 
-	/// Disable graceful shutdown on "Ctrl+C" signal
+	/// Disable graceful shutdown on Ctrl+C
 	///
-	/// By default, Ctrl+C (or the corresponding signal) will initiate a shutdown
+	/// By default, Ctrl+C will initiate a shutdown
 	pub fn dont_catch_signals(mut self) -> Self {
 		self.catch_signals = false;
 		self
