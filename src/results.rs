@@ -54,14 +54,19 @@ pub struct AtLeastOneTaskErrored {
 
 /// This error is returned from a [`spawn`](crate::TasksHandle::spawn) if
 /// we are already shutting down, and consequently can't spawn the task
+///
+/// It is possible to keep spawning tasks during the shutdown process.
+/// That only becomes impossible once either:
+/// - All the currently pending tasks have shut down during a graceful shutdown
+/// - The graceful shutdown timeout has expired
 #[derive(thiserror::Error, Debug)]
 #[error("Task {task_name} was not spawned because we were already stopping")]
-pub struct TasksAreStopping<TaskType> {
+pub struct TasksAreStoppedOrAborting<TaskType> {
 	pub(crate) task_name: String,
 	pub(crate) task_that_failed_to_start: TaskType,
 }
 
-impl<TaskType> TasksAreStopping<TaskType> {
+impl<TaskType> TasksAreStoppedOrAborting<TaskType> {
 	pub fn task_name(&self) -> &str {
 		&self.task_name
 	}

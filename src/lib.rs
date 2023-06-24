@@ -133,7 +133,7 @@ impl TasksBuilder {
 			let mut all_tasks = FuturesUnordered::new();
 			let shutdown_timeout = async {
 				if let Some(timeout) = self.graceful_shutdown_timeout {
-					tasks_handle.inner.should_stop.cancelled().await;
+					tasks_handle.on_shutdown().await;
 					tokio::time::sleep(timeout).await
 				} else {
 					future::pending().await
@@ -144,13 +144,16 @@ impl TasksBuilder {
 				// The timeout will only start the first time this is polled, after the `aborting`
 				// boolean has been set
 				if let Some(timeout) = self.task_abort_timeout {
-					tasks_handle.inner.should_stop.cancelled().await;
+					tasks_handle.on_shutdown().await;
 					tokio::time::sleep(timeout).await
 				} else {
 					future::pending().await
 				}
 			};
 			tokio::pin!(exit_letting_tasks_dangle_timeout);
+			let on_shutdown = tasks_handle.on_shutdown();
+			tokio::pin!(on_shutdown);
+			let mut shutdown_registered = false;
 			let mut aborting = false;
 			let mut tasks_receiver_has_shut_down = false;
 			loop {
@@ -159,8 +162,15 @@ impl TasksBuilder {
 					_ = signal::ctrl_c(), if self.catch_signals => {
 						tasks_handle.start_shutdown();
 					}
+					_ = &mut on_shutdown, if !shutdown_registered => {
+						shutdown_registered = true;
+						if all_tasks.is_empty() {
+							tasks_handle.close_task_spawn_channel();
+						}
+					}
 					_ = &mut shutdown_timeout, if !aborting && self.graceful_shutdown_timeout.is_some() => {
 						warn!("Graceful stopping timeout reached - aborting tasks");
+						tasks_handle.close_task_spawn_channel();
 						aborting = true;
 						all_tasks.iter_mut().for_each(|f: &mut NamedTask<_>| {
 							trace!("Aborting task {}", f.name());
@@ -192,7 +202,7 @@ impl TasksBuilder {
 						let res: TaskResult<E> = task_finished.expect("Branch is disabled so we should never get None");
 						trace!("Got result for task {}", res.name);
 						if let Err(kind) = res.result {
-							let shutting_down = self.shutdown_if_a_task_errors && !tasks_handle.is_shutting_down();
+							let shutting_down = shutdown_registered && self.shutdown_if_a_task_errors;
 							error!(
 								"Task {} errored: {kind}{}",
 								res.name,
@@ -205,9 +215,17 @@ impl TasksBuilder {
 							let _: Result<_, mpsc::error::SendError<_>> = results_sender
 								.send(TaskError{ task_name: res.name, kind });
 						}
-						if tasks_receiver_has_shut_down && all_tasks.is_empty() {
-							trace!("Received last result - exiting management task");
-							break;
+						if all_tasks.is_empty() {
+							if tasks_receiver_has_shut_down {
+								trace!("Received last result - exiting management task");
+								break;
+							} else if shutdown_registered {
+								// We are in the process of a graceful shutdown, and
+								// all currently running tasks have finished,
+								// so it's time to prevent spawning more tasks, then
+								// once it is guaranteed we are not receiving any more we can close
+								tasks_handle.close_task_spawn_channel();
+							}
 						}
 					}
 					_ = &mut exit_letting_tasks_dangle_timeout, if aborting && tasks_receiver_has_shut_down && self.task_abort_timeout.is_some() => {
@@ -320,7 +338,7 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 	/// Spawn a future on the tokio runtime if the Tasks aren't already stopping
 	///
 	/// The future should be built from the provided [`TasksHandle`], and most likely monitor graceful shutdown status.
-	pub fn spawn<F, Fut>(&self, task_name: impl Into<String>, f: F) -> Result<&Self, TasksAreStopping<()>>
+	pub fn spawn<F, Fut>(&self, task_name: impl Into<String>, f: F) -> Result<&Self, TasksAreStoppedOrAborting<()>>
 	where
 		F: FnOnce(TasksHandle<E>) -> Fut,
 		Fut: Future<Output = Result<(), E>> + Send + 'static,
@@ -329,7 +347,7 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 	}
 
 	/// Spawn a blocking task on the tokio runtime if the Tasks aren't already stopping
-	pub fn spawn_blocking<F>(&self, task_name: impl Into<String>, f: F) -> Result<&Self, TasksAreStopping<()>>
+	pub fn spawn_blocking<F>(&self, task_name: impl Into<String>, f: F) -> Result<&Self, TasksAreStoppedOrAborting<()>>
 	where
 		F: FnOnce(TasksHandle<E>) -> Result<(), E> + Send + 'static,
 	{
@@ -345,7 +363,7 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 		task_name: impl Into<String>,
 		task_type: TaskType,
 		spawn: SpawnFn,
-	) -> Result<&Self, TasksAreStopping<TaskType>>
+	) -> Result<&Self, TasksAreStoppedOrAborting<TaskType>>
 	where
 		SpawnFn: FnOnce(TaskType) -> JoinHandle<Result<(), E>>,
 	{
@@ -361,7 +379,7 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 		} else {
 			// If user doesn't care about results it's fine
 			trace!("Not spawning task {name} because already stopping");
-			Err(TasksAreStopping {
+			Err(TasksAreStoppedOrAborting {
 				task_name: name,
 				task_that_failed_to_start: task_type,
 			})
@@ -373,6 +391,11 @@ impl<E> TasksHandle<E> {
 	pub fn start_shutdown(&self) {
 		debug!("Starting graceful shutdown");
 		self.inner.should_stop.cancel();
+	}
+
+	/// Prevent new tasks from being spawned
+	/// This will enable full closing of the management task
+	fn close_task_spawn_channel(&self) {
 		self.inner.tasks_sender.store(None);
 	}
 
@@ -438,9 +461,9 @@ impl TasksBuilder {
 		self
 	}
 
-	/// Disable graceful shutdown on Ctrl+C
+	/// Disable graceful shutdown on "Ctrl+C" signal
 	///
-	/// By default, Ctrl+C will initiate a shutdown
+	/// By default, Ctrl+C (or the corresponding signal) will initiate a shutdown
 	pub fn dont_catch_signals(mut self) -> Self {
 		self.catch_signals = false;
 		self
