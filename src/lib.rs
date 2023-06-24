@@ -200,7 +200,7 @@ impl TasksBuilder {
 					}
 					task_finished = all_tasks.next(), if !all_tasks.is_empty() => {
 						let res: TaskResult<E> = task_finished.expect("Branch is disabled so we should never get None");
-						trace!("Got result for task {}", res.name);
+						debug!("Got result for task {}", res.name);
 						if let Err(kind) = res.result {
 							let shutting_down = shutdown_registered && self.shutdown_if_a_task_errors;
 							error!(
@@ -370,7 +370,7 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 		let name = task_name.into();
 		let tasks_sender_guard = self.inner.tasks_sender.load();
 		if let Some(tasks_sender) = &*tasks_sender_guard {
-			trace!("Spawning task {name}");
+			debug!("Spawning task {name}");
 			let task = spawn(task_type);
 			tasks_sender
 				.send(NamedTask { name: Some(name), task })
@@ -378,7 +378,7 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 			Ok(self)
 		} else {
 			// If user doesn't care about results it's fine
-			trace!("Not spawning task {name} because already stopping");
+			debug!("Not spawning task {name} because already stopping");
 			Err(TasksAreStoppedOrAborting {
 				task_name: name,
 				task_that_failed_to_start: task_type,
