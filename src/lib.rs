@@ -202,13 +202,13 @@ impl TasksBuilder {
 						let res: TaskResult<E> = task_finished.expect("Branch is disabled so we should never get None");
 						debug!("Got result for task {}", res.name);
 						if let Err(kind) = res.result {
-							let shutting_down = shutdown_registered && self.shutdown_if_a_task_errors;
+							let shutting_down_now = !shutdown_registered && self.shutdown_if_a_task_errors;
 							error!(
 								"Task {} errored: {kind}{}",
 								res.name,
-								if shutting_down {", starting shutdown..."} else {""}
+								if shutting_down_now {", starting shutdown..."} else {""}
 							);
-							if shutting_down {
+							if shutting_down_now {
 								tasks_handle.start_shutdown();
 							}
 							// If user doesn't care about results it's fine
