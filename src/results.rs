@@ -8,7 +8,7 @@ pub(crate) struct TaskResult<E> {
 /// When handling tasks errors individually through
 /// [`TasksMainHandle::join_all_with`](crate::TasksMainHandle::join_all_with), you get this, giving details about what
 /// task it was and why exactly it didn't succeed
-#[derive(thiserror::Error)]
+#[derive(thiserror::Error, Debug)]
 #[error("Task {task_name} errored: {kind}")]
 pub struct TaskError<E> {
 	pub(crate) task_name: String,
@@ -34,7 +34,7 @@ impl<E> TaskError<E> {
 /// When handling tasks errors individually through
 /// [`TasksMainHandle::join_all_with`](crate::TasksMainHandle::join_all_with), you get this, giving details about why
 /// exactly it didn't succeed
-#[derive(thiserror::Error)]
+#[derive(thiserror::Error, Debug)]
 pub enum TaskErrorKind<E> {
 	#[error("User error: {0}")]
 	UserError(E),
