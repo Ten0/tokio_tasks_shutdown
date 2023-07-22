@@ -62,21 +62,21 @@
 //! shutdown at t=150ms, which will immediately make it gracefully shut down.
 
 mod named_task;
-mod on_shutdown_or;
+pub mod on_shutdown_or;
 pub mod results;
+mod should_shutdown;
 
-pub use on_shutdown_or::{OnShutdownOr, ShouldShutdownOr};
+pub use on_shutdown_or::ShouldShutdownOr;
 
 use results::*;
 
-use named_task::NamedTask;
+use {named_task::NamedTask, on_shutdown_or::OnShutdownOr, should_shutdown::ShouldShutdown};
 
 use {
 	futures::{prelude::*, stream::futures_unordered::FuturesUnordered},
 	log::{debug, error, trace, warn},
 	std::{fmt, sync::Arc},
 	tokio::{signal, sync::mpsc, task::JoinHandle},
-	tokio_util::sync::CancellationToken,
 };
 
 /// Main handle to the set of tasks. This is the only one that may be used to collect their results.
@@ -116,11 +116,7 @@ impl<E> Clone for TasksHandle<E> {
 
 struct TasksInner<E> {
 	tasks_sender: arc_swap::ArcSwapOption<mpsc::UnboundedSender<NamedTask<E>>>,
-	should_stop: ShouldStop,
-}
-struct ShouldStop {
-	cancellation_token: CancellationToken,
-	atomic: std::sync::atomic::AtomicBool,
+	should_shutdown: ShouldShutdown,
 }
 
 impl TasksBuilder {
@@ -134,10 +130,7 @@ impl TasksBuilder {
 		let tasks_handle = TasksHandle {
 			inner: Arc::new(TasksInner {
 				tasks_sender: arc_swap::ArcSwapOption::new(Some(Arc::new(tasks_sender))),
-				should_stop: ShouldStop {
-					cancellation_token: CancellationToken::new(),
-					atomic: false.into(),
-				},
+				should_shutdown: ShouldShutdown::default(),
 			}),
 		};
 
@@ -404,21 +397,12 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 impl<E> TasksHandle<E> {
 	pub fn start_shutdown(&self) {
 		if log::log_enabled!(log::Level::Debug) {
-			if !self
-				.inner
-				.should_stop
-				.atomic
-				.swap(true, std::sync::atomic::Ordering::Relaxed)
-			{
+			if !self.inner.should_shutdown.start_shutdown_check_was() {
 				debug!("Starting graceful shutdown");
 			}
 		} else {
-			self.inner
-				.should_stop
-				.atomic
-				.store(true, std::sync::atomic::Ordering::Relaxed);
+			self.inner.should_shutdown.start_shutdown();
 		}
-		self.inner.should_stop.cancellation_token.cancel();
 	}
 
 	/// Prevent new tasks from being spawned
@@ -429,7 +413,7 @@ impl<E> TasksHandle<E> {
 
 	/// This future will resolve when graceful shutdown was asked
 	pub async fn on_shutdown(&self) {
-		self.inner.should_stop.cancellation_token.cancelled().await
+		self.inner.should_shutdown.on_shutdown().await
 	}
 
 	/// This future will resolve when graceful shutdown was asked, or when the provided future resolves
@@ -456,12 +440,12 @@ impl<E> TasksHandle<E> {
 	/// because it will avoid instantiating the `WaitForCancellationFuture` and polling it if we are not shutting down
 	/// and `f` is ready.
 	pub fn on_shutdown_or<'a, F: Future>(&'a self, f: F) -> OnShutdownOr<'a, F> {
-		on_shutdown_or::OnShutdownOr::new(&self.inner.should_stop, f)
+		on_shutdown_or::OnShutdownOr::new(&self.inner.should_shutdown, f)
 	}
 
 	/// Whether graceful shutdown was asked
 	pub fn is_shutting_down(&self) -> bool {
-		self.inner.should_stop.atomic.load(std::sync::atomic::Ordering::Relaxed)
+		self.inner.should_shutdown.should_shutdown()
 	}
 }
 
