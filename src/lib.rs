@@ -16,15 +16,20 @@
 //! tasks
 //! 	.spawn("gracefully_shutting_down_task", |tasks_handle| async move {
 //! 		loop {
-//! 			tokio::select! {
-//! 				biased;
-//! 				_ = tasks_handle.on_shutdown() => {
+//! 			match tasks_handle
+//! 				.on_shutdown_or({
+//! 					// Simulating another future running concurrently,
+//! 					// e.g. listening on a channel...
+//! 					sleep(Duration::from_millis(100))
+//! 				})
+//! 				.await
+//! 			{
+//! 				ShouldShutdownOr::ShouldShutdown => {
 //! 					// We have been kindly asked to shutdown, let's exit
 //! 					break;
 //! 				}
-//! 				_ = sleep(Duration::from_millis(100)) => {
-//! 					// Simulating another future running concurrently,
-//! 					// e.g. listening on a channel...
+//! 				ShouldShutdownOr::ShouldNotShutdown(res) => {
+//! 					// Got result of channel listening
 //! 				}
 //! 			}
 //! 		}
@@ -423,8 +428,8 @@ impl<E> TasksHandle<E> {
 	}
 
 	/// This future will resolve when graceful shutdown was asked
-	pub fn on_shutdown(&self) -> tokio_util::sync::WaitForCancellationFuture<'_> {
-		self.inner.should_stop.cancellation_token.cancelled()
+	pub async fn on_shutdown(&self) {
+		self.inner.should_stop.cancellation_token.cancelled().await
 	}
 
 	/// This future will resolve when graceful shutdown was asked, or when the provided future resolves
@@ -432,7 +437,9 @@ impl<E> TasksHandle<E> {
 	/// Resolving as [`ShouldShutdown`](`ShouldShutdownOr::ShouldShutdown`) is prioritary over resolving as `f` if both
 	/// are `Ready`
 	///
-	/// This is a more efficient version of the `tokio::select` pattern:
+	/// See crate documentation for usage.
+	///
+	/// This is a more efficient version than the `tokio::select` pattern:
 	/// ```ignore
 	/// 	tokio::select! {
 	/// 		biased;
