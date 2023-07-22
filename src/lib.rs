@@ -64,19 +64,19 @@
 mod named_task;
 pub mod on_shutdown_or;
 pub mod results;
-mod should_shutdown;
 
 pub use on_shutdown_or::ShouldShutdownOr;
 
 use results::*;
 
-use {named_task::NamedTask, on_shutdown_or::OnShutdownOr, should_shutdown::ShouldShutdown};
+use {named_task::NamedTask, on_shutdown_or::OnShutdownOr};
 
 use {
 	futures::{prelude::*, stream::futures_unordered::FuturesUnordered},
 	log::{debug, error, trace, warn},
 	std::{fmt, sync::Arc},
 	tokio::{signal, sync::mpsc, task::JoinHandle},
+	tokio_util::sync::CancellationToken,
 };
 
 /// Main handle to the set of tasks. This is the only one that may be used to collect their results.
@@ -104,19 +104,24 @@ pub struct TasksBuilder {
 /// only the [`TasksMainHandle`] has access to that.
 pub struct TasksHandle<E> {
 	inner: Arc<TasksInner<E>>,
+	/// This is a child_token from the one stored in `inner`, to minimize contention within
+	/// `tokio_util::Notified::poll_notified`
+	leaf_cancellation_token: CancellationToken,
 }
 
 impl<E> Clone for TasksHandle<E> {
 	fn clone(&self) -> Self {
 		Self {
 			inner: self.inner.clone(),
+			leaf_cancellation_token: self.inner.root_cancellation_token.child_token(),
 		}
 	}
 }
 
 struct TasksInner<E> {
 	tasks_sender: arc_swap::ArcSwapOption<mpsc::UnboundedSender<NamedTask<E>>>,
-	should_shutdown: ShouldShutdown,
+	is_shutting_down: std::sync::atomic::AtomicBool,
+	root_cancellation_token: CancellationToken,
 }
 
 impl TasksBuilder {
@@ -127,11 +132,14 @@ impl TasksBuilder {
 		let (tasks_sender, mut tasks_receiver) = mpsc::unbounded_channel::<NamedTask<E>>();
 		let (results_sender, results_receiver) = mpsc::unbounded_channel::<TaskError<E>>();
 
+		let inner = Arc::new(TasksInner {
+			tasks_sender: arc_swap::ArcSwapOption::new(Some(Arc::new(tasks_sender))),
+			root_cancellation_token: CancellationToken::new(),
+			is_shutting_down: false.into(),
+		});
 		let tasks_handle = TasksHandle {
-			inner: Arc::new(TasksInner {
-				tasks_sender: arc_swap::ArcSwapOption::new(Some(Arc::new(tasks_sender))),
-				should_shutdown: ShouldShutdown::default(),
-			}),
+			leaf_cancellation_token: inner.root_cancellation_token.child_token(),
+			inner,
 		};
 
 		let tasks_handle_clone = tasks_handle.clone();
@@ -397,12 +405,19 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 impl<E> TasksHandle<E> {
 	pub fn start_shutdown(&self) {
 		if log::log_enabled!(log::Level::Debug) {
-			if !self.inner.should_shutdown.start_shutdown_check_was() {
+			if !self
+				.inner
+				.is_shutting_down
+				.swap(true, std::sync::atomic::Ordering::Relaxed)
+			{
 				debug!("Starting graceful shutdown");
 			}
 		} else {
-			self.inner.should_shutdown.start_shutdown();
+			self.inner
+				.is_shutting_down
+				.store(true, std::sync::atomic::Ordering::Relaxed);
 		}
+		self.inner.root_cancellation_token.cancel();
 	}
 
 	/// Prevent new tasks from being spawned
@@ -413,7 +428,7 @@ impl<E> TasksHandle<E> {
 
 	/// This future will resolve when graceful shutdown was asked
 	pub async fn on_shutdown(&self) {
-		self.inner.should_shutdown.on_shutdown().await
+		self.leaf_cancellation_token.cancelled().await
 	}
 
 	/// This future will resolve when graceful shutdown was asked, or when the provided future resolves
@@ -440,12 +455,12 @@ impl<E> TasksHandle<E> {
 	/// because it will avoid instantiating the `on_shutdown` and polling it if we are not shutting down
 	/// and `f` is ready.
 	pub fn on_shutdown_or<'a, F: Future>(&'a self, f: F) -> OnShutdownOr<'a, F> {
-		on_shutdown_or::OnShutdownOr::new(&self.inner.should_shutdown, f)
+		on_shutdown_or::OnShutdownOr::new(&self.inner.is_shutting_down, &self.leaf_cancellation_token, f)
 	}
 
 	/// Whether graceful shutdown was asked
 	pub fn is_shutting_down(&self) -> bool {
-		self.inner.should_shutdown.should_shutdown()
+		self.inner.is_shutting_down.load(std::sync::atomic::Ordering::Relaxed)
 	}
 }
 
