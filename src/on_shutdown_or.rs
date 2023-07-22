@@ -1,17 +1,14 @@
 use crate::ShouldStop;
 
-use {
-	futures::prelude::*,
-	std::{pin::Pin, task::Poll},
-	tokio_util::sync::WaitForCancellationFuture,
-};
+use {futures::prelude::*, std::task::Poll, tokio_util::sync::WaitForCancellationFuture};
 
 pin_project_lite::pin_project! {
 	pub struct OnShutdownOr<'a, F> {
 		should_stop: &'a ShouldStop,
 		#[pin]
 		fut: F,
-		ct_cancelled: Option<Pin<Box<WaitForCancellationFuture<'a>>>>, // TODO figure out if we can remove that boxing
+		#[pin]
+		wait_for_cancellation_future: Option<WaitForCancellationFuture<'a>>,
 	}
 }
 
@@ -20,7 +17,7 @@ impl<'a, F: Future> OnShutdownOr<'a, F> {
 		Self {
 			should_stop,
 			fut,
-			ct_cancelled: None,
+			wait_for_cancellation_future: None,
 		}
 	}
 }
@@ -37,16 +34,15 @@ impl<'a, F: Future> Future for OnShutdownOr<'a, F> {
 		if self.should_stop.atomic.load(std::sync::atomic::Ordering::Relaxed) {
 			Poll::Ready(ShouldShutdownOr::ShouldShutdown)
 		} else {
-			let p = self.project();
+			let mut p = self.project();
 			match p.fut.poll(cx) {
 				Poll::Ready(v) => Poll::Ready(ShouldShutdownOr::ShouldNotShutdown(v)),
 				Poll::Pending => {
-					match p
-						.ct_cancelled
-						.get_or_insert_with(|| Box::pin(p.should_stop.cancellation_token.cancelled()))
-						.as_mut()
-						.poll(cx)
-					{
+					if p.wait_for_cancellation_future.is_none() {
+						p.wait_for_cancellation_future
+							.set(Some(p.should_stop.cancellation_token.cancelled()));
+					}
+					match p.wait_for_cancellation_future.as_pin_mut().unwrap().poll(cx) {
 						Poll::Ready(()) => Poll::Ready(ShouldShutdownOr::ShouldShutdown),
 						Poll::Pending => Poll::Pending,
 					}
