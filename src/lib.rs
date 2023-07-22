@@ -437,7 +437,7 @@ impl<E> TasksHandle<E> {
 	/// 		}
 	/// 	}
 	/// ```
-	/// because it will avoid instantiating the `WaitForCancellationFuture` and polling it if we are not shutting down
+	/// because it will avoid instantiating the `on_shutdown` and polling it if we are not shutting down
 	/// and `f` is ready.
 	pub fn on_shutdown_or<'a, F: Future>(&'a self, f: F) -> OnShutdownOr<'a, F> {
 		on_shutdown_or::OnShutdownOr::new(&self.inner.should_shutdown, f)
