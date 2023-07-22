@@ -16,15 +16,20 @@
 //! tasks
 //! 	.spawn("gracefully_shutting_down_task", |tasks_handle| async move {
 //! 		loop {
-//! 			tokio::select! {
-//! 				biased;
-//! 				_ = tasks_handle.on_shutdown() => {
+//! 			match tasks_handle
+//! 				.on_shutdown_or({
+//! 					// Simulating another future running concurrently,
+//! 					// e.g. listening on a channel...
+//! 					sleep(Duration::from_millis(100))
+//! 				})
+//! 				.await
+//! 			{
+//! 				ShouldShutdownOr::ShouldShutdown => {
 //! 					// We have been kindly asked to shutdown, let's exit
 //! 					break;
 //! 				}
-//! 				_ = sleep(Duration::from_millis(100)) => {
-//! 					// Simulating another future running concurrently,
-//! 					// e.g. listening on a channel...
+//! 				ShouldShutdownOr::ShouldNotShutdown(res) => {
+//! 					// Got result of channel listening
 //! 				}
 //! 			}
 //! 		}
@@ -57,18 +62,21 @@
 //! shutdown at t=150ms, which will immediately make it gracefully shut down.
 
 mod named_task;
+pub mod on_shutdown_or;
 pub mod results;
+mod should_shutdown;
+
+pub use on_shutdown_or::ShouldShutdownOr;
 
 use results::*;
 
-use named_task::NamedTask;
+use {named_task::NamedTask, on_shutdown_or::OnShutdownOr, should_shutdown::ShouldShutdown};
 
 use {
 	futures::{prelude::*, stream::futures_unordered::FuturesUnordered},
 	log::{debug, error, trace, warn},
 	std::{fmt, sync::Arc},
 	tokio::{signal, sync::mpsc, task::JoinHandle},
-	tokio_util::sync::CancellationToken,
 };
 
 /// Main handle to the set of tasks. This is the only one that may be used to collect their results.
@@ -108,7 +116,7 @@ impl<E> Clone for TasksHandle<E> {
 
 struct TasksInner<E> {
 	tasks_sender: arc_swap::ArcSwapOption<mpsc::UnboundedSender<NamedTask<E>>>,
-	should_stop: CancellationToken,
+	should_shutdown: ShouldShutdown,
 }
 
 impl TasksBuilder {
@@ -118,12 +126,11 @@ impl TasksBuilder {
 	pub fn build<E: Send + fmt::Display + 'static>(self) -> TasksMainHandle<E> {
 		let (tasks_sender, mut tasks_receiver) = mpsc::unbounded_channel::<NamedTask<E>>();
 		let (results_sender, results_receiver) = mpsc::unbounded_channel::<TaskError<E>>();
-		let should_stop = CancellationToken::new();
 
 		let tasks_handle = TasksHandle {
 			inner: Arc::new(TasksInner {
 				tasks_sender: arc_swap::ArcSwapOption::new(Some(Arc::new(tasks_sender))),
-				should_stop,
+				should_shutdown: ShouldShutdown::default(),
 			}),
 		};
 
@@ -390,11 +397,12 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 impl<E> TasksHandle<E> {
 	pub fn start_shutdown(&self) {
 		if log::log_enabled!(log::Level::Debug) {
-			if !self.inner.should_stop.is_cancelled() {
+			if !self.inner.should_shutdown.start_shutdown_check_was() {
 				debug!("Starting graceful shutdown");
 			}
+		} else {
+			self.inner.should_shutdown.start_shutdown();
 		}
-		self.inner.should_stop.cancel();
 	}
 
 	/// Prevent new tasks from being spawned
@@ -404,13 +412,40 @@ impl<E> TasksHandle<E> {
 	}
 
 	/// This future will resolve when graceful shutdown was asked
-	pub fn on_shutdown(&self) -> tokio_util::sync::WaitForCancellationFuture<'_> {
-		self.inner.should_stop.cancelled()
+	pub async fn on_shutdown(&self) {
+		self.inner.should_shutdown.on_shutdown().await
+	}
+
+	/// This future will resolve when graceful shutdown was asked, or when the provided future resolves
+	///
+	/// Resolving as [`ShouldShutdown`](`ShouldShutdownOr::ShouldShutdown`) is prioritary over resolving as `f` if both
+	/// are `Ready`
+	///
+	/// See crate documentation for usage.
+	///
+	/// This is a more efficient version than the `tokio::select` pattern:
+	/// ```ignore
+	/// 	tokio::select! {
+	/// 		biased;
+	/// 		_ = tasks_handle.on_shutdown() => {
+	/// 			// We have been kindly asked to shutdown, let's exit
+	/// 			break;
+	/// 		}
+	/// 		_ = sleep(Duration::from_millis(100)) => {
+	/// 			// Simulating another future running concurrently,
+	/// 			// e.g. listening on a channel...
+	/// 		}
+	/// 	}
+	/// ```
+	/// because it will avoid instantiating the `on_shutdown` and polling it if we are not shutting down
+	/// and `f` is ready.
+	pub fn on_shutdown_or<'a, F: Future>(&'a self, f: F) -> OnShutdownOr<'a, F> {
+		on_shutdown_or::OnShutdownOr::new(&self.inner.should_shutdown, f)
 	}
 
 	/// Whether graceful shutdown was asked
 	pub fn is_shutting_down(&self) -> bool {
-		self.inner.should_stop.is_cancelled()
+		self.inner.should_shutdown.should_shutdown()
 	}
 }
 
