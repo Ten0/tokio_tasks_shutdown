@@ -427,8 +427,8 @@ impl<E> TasksHandle<E> {
 	}
 
 	/// This future will resolve when graceful shutdown was asked
-	pub async fn on_shutdown(&self) {
-		self.leaf_cancellation_token.cancelled().await
+	pub fn on_shutdown(&self) -> tokio_util::sync::WaitForCancellationFuture<'_> {
+		self.leaf_cancellation_token.cancelled()
 	}
 
 	/// This future will resolve when graceful shutdown was asked, or when the provided future resolves
