@@ -427,6 +427,27 @@ impl<E> TasksHandle<E> {
 		self.inner.should_stop.cancellation_token.cancelled()
 	}
 
+	/// This future will resolve when graceful shutdown was asked, or when the provided future resolves
+	///
+	/// Resolving as [`ShouldShutdown`](`ShouldShutdownOr::ShouldShutdown`) is prioritary over resolving as `f` if both
+	/// are `Ready`
+	///
+	/// This is a more efficient version of the `tokio::select` pattern:
+	/// ```ignore
+	/// 	tokio::select! {
+	/// 		biased;
+	/// 		_ = tasks_handle.on_shutdown() => {
+	/// 			// We have been kindly asked to shutdown, let's exit
+	/// 			break;
+	/// 		}
+	/// 		_ = sleep(Duration::from_millis(100)) => {
+	/// 			// Simulating another future running concurrently,
+	/// 			// e.g. listening on a channel...
+	/// 		}
+	/// 	}
+	/// ```
+	/// because it will avoid instantiating the `WaitForCancellationFuture` and polling it if we are not shutting down
+	/// and `f` is ready.
 	pub fn on_shutdown_or<'a, F: Future>(&'a self, f: F) -> OnShutdownOr<'a, F> {
 		on_shutdown_or::OnShutdownOr::new(&self.inner.should_stop, f)
 	}
