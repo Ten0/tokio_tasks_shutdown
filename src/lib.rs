@@ -63,6 +63,7 @@
 
 mod named_task;
 pub mod on_shutdown_or;
+mod on_stop_signal;
 pub mod results;
 
 pub use on_shutdown_or::ShouldShutdownOr;
@@ -75,7 +76,7 @@ use {
 	futures::{prelude::*, stream::futures_unordered::FuturesUnordered},
 	log::{debug, error, trace, warn},
 	std::{fmt, sync::Arc},
-	tokio::{signal, sync::mpsc, task::JoinHandle},
+	tokio::{sync::mpsc, task::JoinHandle},
 	tokio_util::sync::CancellationToken,
 };
 
@@ -174,7 +175,7 @@ impl TasksBuilder {
 			loop {
 				tokio::select! {
 					biased;
-					_ = signal::ctrl_c(), if self.catch_signals => {
+					_ = on_stop_signal::on_stop_signal(), if self.catch_signals => {
 						tasks_handle.start_shutdown();
 					}
 					_ = &mut on_shutdown, if !shutdown_registered => {
@@ -515,9 +516,9 @@ impl TasksBuilder {
 		self
 	}
 
-	/// Disable graceful shutdown on Ctrl+C
+	/// Disable graceful shutdown on Ctrl+C/SIGINT/SIGTERM
 	///
-	/// By default, Ctrl+C will initiate a shutdown
+	/// By default, Ctrl+C/SIGINT/SIGTERM will initiate a shutdown
 	pub fn dont_catch_signals(mut self) -> Self {
 		self.catch_signals = false;
 		self
