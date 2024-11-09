@@ -39,6 +39,8 @@ async fn error_causes_stop() {
 	let start = std::time::Instant::now();
 	let master = TasksBuilder::default().dont_catch_signals().build::<InternalError>();
 
+	std::env::set_var("RUST_BACKTRACE", "0"); // For the display impl test below
+
 	master
 		.spawn("erroring_task", |_| async move {
 			sleep(Duration::from_millis(10)).await;
