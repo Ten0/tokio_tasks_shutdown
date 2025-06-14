@@ -205,7 +205,7 @@ impl TasksBuilder {
 								}
 							}
 							Some(new_task) => {
-								trace!("Registering task: {}", new_task.name());
+								trace!("Registering task {}: {}", new_task.task.id(), new_task.name());
 								if aborting {
 									trace!("We are already stopping, so {} will be aborted right away", new_task.name());
 									new_task.abort();
@@ -354,22 +354,53 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 	/// Spawn a future on the tokio runtime if the Tasks aren't already stopping
 	///
 	/// The future should be built from the provided [`TasksHandle`], and most likely monitor graceful shutdown status.
+	#[allow(unexpected_cfgs)]
 	pub fn spawn<F, Fut>(&self, task_name: impl Into<String>, f: F) -> Result<&Self, TasksAreStoppedOrAborting<()>>
 	where
 		F: FnOnce(TasksHandle<E>) -> Fut,
 		Fut: Future<Output = Result<(), E>> + Send + 'static,
 	{
-		self.spawn_advanced(task_name, (), |()| tokio::task::spawn(f(self.clone())))
+		let task_name = task_name.into();
+		#[cfg(tokio_unstable)]
+		let task_name_clone = task_name.clone();
+		self.spawn_advanced(task_name, (), |()| {
+			let handle = self.clone();
+			#[cfg(not(tokio_unstable))]
+			{
+				tokio::task::spawn(f(handle))
+			}
+			#[cfg(tokio_unstable)]
+			{
+				tokio::task::Builder::new()
+					.name(&task_name_clone)
+					.spawn(f(handle))
+					.unwrap()
+			}
+		})
 	}
 
 	/// Spawn a blocking task on the tokio runtime if the Tasks aren't already stopping
+	#[allow(unexpected_cfgs)]
 	pub fn spawn_blocking<F>(&self, task_name: impl Into<String>, f: F) -> Result<&Self, TasksAreStoppedOrAborting<()>>
 	where
 		F: FnOnce(TasksHandle<E>) -> Result<(), E> + Send + 'static,
 	{
+		let task_name = task_name.into();
+		#[cfg(tokio_unstable)]
+		let task_name_clone = task_name.clone();
 		self.spawn_advanced(task_name, (), |()| {
 			let handle = self.clone();
-			tokio::task::spawn_blocking(move || f(handle))
+			#[cfg(not(tokio_unstable))]
+			{
+				tokio::task::spawn_blocking(move || f(handle))
+			}
+			#[cfg(tokio_unstable)]
+			{
+				tokio::task::Builder::new()
+					.name(&task_name_clone)
+					.spawn_blocking(move || f(handle))
+					.unwrap()
+			}
 		})
 	}
 
