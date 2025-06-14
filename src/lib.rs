@@ -360,10 +360,7 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 		F: FnOnce(TasksHandle<E>) -> Fut,
 		Fut: Future<Output = Result<(), E>> + Send + 'static,
 	{
-		let task_name = task_name.into();
-		#[cfg(tokio_unstable)]
-		let task_name_clone = task_name.clone();
-		self.spawn_advanced(task_name, (), |()| {
+		self.spawn_advanced_inner(task_name, (), |(), _task_name| {
 			let handle = self.clone();
 			#[cfg(not(tokio_unstable))]
 			{
@@ -371,10 +368,7 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 			}
 			#[cfg(tokio_unstable)]
 			{
-				tokio::task::Builder::new()
-					.name(&task_name_clone)
-					.spawn(f(handle))
-					.unwrap()
+				tokio::task::Builder::new().name(&_task_name).spawn(f(handle)).unwrap()
 			}
 		})
 	}
@@ -385,10 +379,7 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 	where
 		F: FnOnce(TasksHandle<E>) -> Result<(), E> + Send + 'static,
 	{
-		let task_name = task_name.into();
-		#[cfg(tokio_unstable)]
-		let task_name_clone = task_name.clone();
-		self.spawn_advanced(task_name, (), |()| {
+		self.spawn_advanced_inner(task_name, (), |(), _task_name| {
 			let handle = self.clone();
 			#[cfg(not(tokio_unstable))]
 			{
@@ -397,7 +388,7 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 			#[cfg(tokio_unstable)]
 			{
 				tokio::task::Builder::new()
-					.name(&task_name_clone)
+					.name(&_task_name)
 					.spawn_blocking(move || f(handle))
 					.unwrap()
 			}
@@ -414,11 +405,23 @@ impl<E: Send + fmt::Debug + 'static> TasksHandle<E> {
 	where
 		SpawnFn: FnOnce(TaskType) -> JoinHandle<Result<(), E>>,
 	{
-		let name = task_name.into();
+		self.spawn_advanced_inner(task_name, task_type, |task_type, _name| spawn(task_type))
+	}
+
+	fn spawn_advanced_inner<TaskType, SpawnFn>(
+		&self,
+		task_name: impl Into<String>,
+		task_type: TaskType,
+		spawn: SpawnFn,
+	) -> Result<&Self, TasksAreStoppedOrAborting<TaskType>>
+	where
+		SpawnFn: FnOnce(TaskType, &str) -> JoinHandle<Result<(), E>>,
+	{
+		let name: String = task_name.into();
 		let tasks_sender_guard = self.inner.tasks_sender.load();
 		if let Some(tasks_sender) = &*tasks_sender_guard {
 			debug!("Spawning task {name}");
-			let task = spawn(task_type);
+			let task = spawn(task_type, &name);
 			tasks_sender
 				.send(NamedTask { name: Some(name), task })
 				.expect("Receiving end of the tasks shouldn't have stopped by itself");
